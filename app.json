@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "manageme",
+    "slug": "manageme",
+    "version": "1.0.0",
+    "assetBundlePatterns": [
+      "**/*"
+    ]
+  }
+}
