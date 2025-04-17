@@ -5,6 +5,20 @@
     "version": "1.0.0",
     "assetBundlePatterns": [
       "**/*"
-    ]
+    ],
+    "newArchEnabled": true,
+    "notification": {
+      "icon": "./assets/notification-icon.png",
+      "color": "#6200ee"
+    },
+    "android": {
+      "permissions": [
+        "NOTIFICATIONS"
+      ]
+    },
+    "ios": {
+      "supportsTablet": true,
+      "requireFullScreen": true
+    }
   }
 }
