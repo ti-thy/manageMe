@@ -1,25 +1,19 @@
+// src/components/EmailSetupComponent.js
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, Alert } from 'react-native';
 import { Input, Button, Text } from 'react-native-elements';
 import { useSelector, useDispatch } from 'react-redux';
 import Animated, { Easing, useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import * as Notifications from 'expo-notifications';
-import { fetchEmailEvents, storeEmailToken } from '../shared/api';
+import { fetchEmailEvents, getEmailToken, refreshAccessToken } from '../shared/api';
 import { MAX_EMAIL_ACCOUNTS } from '../shared/constants';
 
-// Redux actions
-const addEmail = (email, events) => ({
-  type: 'ADD_EMAIL',
-  payload: { email, events },
-});
-
-const EmailSetupComponent = () => {
-  const [email, setEmail] = useState('');
+const EmailSetupComponent = ({ navigation }) => {
   const dispatch = useDispatch();
-  const user = useSelector(state => state.user);
-  const emails = user?.emails || [];
+  const user = useSelector((state) => state.user) || { emails: [] };
+  const events = useSelector((state) => state.events) || [];
+  const emails = user.emails || [];
 
-  // 3D button animation
   const rotateX = useSharedValue(0);
   const rotateY = useSharedValue(0);
 
@@ -36,44 +30,68 @@ const EmailSetupComponent = () => {
     rotateY.value = withTiming(360, { duration: 1000, easing: Easing.inOut(Easing.quad) });
   };
 
-  const handleAddEmail = async () => {
-    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      Alert.alert('Error', 'Please enter a valid email address.');
-      return;
+  useEffect(() => {
+    const fetchAllEvents = async () => {
+      dispatch({ type: 'SET_LOADING', payload: true });
+      try {
+        const allEvents = [];
+        for (const email of emails) {
+          let token = await getEmailToken(email);
+          let accessToken = token?.accessToken;
+          if (!accessToken) continue;
+          try {
+            const newEvents = await fetchEmailEvents(accessToken);
+            allEvents.push(...newEvents.map((event) => ({ ...event, accessToken })));
+          } catch (err) {
+            if (err.message === 'Token expired' && token.refreshToken) {
+              accessToken = await refreshAccessToken(token.refreshToken);
+              token = { ...token, accessToken };
+              await storeEmailToken(email, token);
+              const newEvents = await fetchEmailEvents(accessToken);
+              allEvents.push(...newEvents.map((event) => ({ ...event, accessToken })));
+            }
+          }
+        }
+        dispatch({ type: 'SET_EVENTS', payload: allEvents });
+        checkClashes(allEvents);
+      } catch (error) {
+        Alert.alert('Error', 'Failed to fetch events.');
+        console.error(error);
+      } finally {
+        dispatch({ type: 'SET_LOADING', payload: false });
+      }
+    };
+    if (emails.length > 0) fetchAllEvents();
+  }, [emails]);
+
+  const checkClashes = (allEvents) => {
+    const clashes = [];
+    for (let i = 0; i < allEvents.length; i++) {
+      for (let j = i + 1; j < allEvents.length; j++) {
+        const event1 = allEvents[i];
+        const event2 = allEvents[j];
+        const start1 = new Date(event1.start);
+        const end1 = new Date(event1.end);
+        const start2 = new Date(event2.start);
+        const end2 = new Date(event2.end);
+        if (start1 < end2 && start2 < end1) {
+          clashes.push({
+            id: `${event1.id}-${event2.id}`,
+            event1,
+            event2,
+          });
+        }
+      }
     }
-
-    if (emails.includes(email)) {
-      Alert.alert('Error', 'This email is already linked.');
-      return;
-    }
-
-    if (emails.length >= MAX_EMAIL_ACCOUNTS) {
-      Alert.alert('Limit Reached', `You can only link up to ${MAX_EMAIL_ACCOUNTS} email accounts.`);
-      return;
-    }
-
-    try {
-      // Mock OAuth token (replace with expo-auth-session in debugging phase)
-      const token = `mock-token-${email}`;
-      await storeEmailToken(email, token);
-
-      // Fetch email events
-      const events = await fetchEmailEvents(email);
-      dispatch(addEmail(email, events));
-
-      // Notify user
-      await Notifications.scheduleNotificationAsync({
+    if (clashes.length > 0) {
+      clashes.forEach((clash) => dispatch({ type: 'ADD_CLASH', payload: clash }));
+      Notifications.scheduleNotificationAsync({
         content: {
-          title: 'Email Linked',
-          body: `Successfully linked ${email}. ${events.length} events fetched.`,
+          title: 'Event Clash Detected',
+          body: `You have ${clashes.length} event clash(es). Please resolve manually.`,
         },
         trigger: null,
       });
-
-      setEmail('');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to link email. Please try again.');
-      console.error(error);
     }
   };
 
@@ -86,24 +104,24 @@ const EmailSetupComponent = () => {
       {emails.map((e, index) => (
         <Text key={index} style={styles.emailItem}>• {e}</Text>
       ))}
-      <Input
-        placeholder="Enter email address"
-        value={email}
-        onChangeText={setEmail}
-        containerStyle={styles.input}
-        leftIcon={{ type: 'font-awesome', name: 'envelope' }}
-        keyboardType="email-address"
-      />
       <Animated.View style={[styles.buttonContainer, animatedStyle]}>
         <Button
-          title="Add Email"
+          title="Add Another Account"
           onPress={() => {
             handleButtonPress();
-            handleAddEmail();
+            navigation.navigate('Auth');
           }}
           buttonStyle={styles.button}
         />
       </Animated.View>
+      {emails.length > 0 && (
+        <Button
+          title="View Calendar"
+          onPress={() => navigation.navigate('Calendar')}
+          buttonStyle={styles.button}
+          containerStyle={styles.buttonContainer}
+        />
+      )}
     </View>
   );
 };
@@ -126,9 +144,6 @@ const styles = StyleSheet.create({
   emailItem: {
     fontSize: 16,
     marginVertical: 5,
-  },
-  input: {
-    marginBottom: 20,
   },
   button: {
     backgroundColor: '#6200ee',

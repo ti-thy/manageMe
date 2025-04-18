@@ -7,10 +7,6 @@
       "**/*"
     ],
     "newArchEnabled": true,
-    "notification": {
-      "icon": "./assets/notification-icon.png",
-      "color": "#6200ee"
-    },
     "android": {
       "permissions": [
         "NOTIFICATIONS"

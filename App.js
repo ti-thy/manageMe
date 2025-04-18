@@ -1,3 +1,4 @@
+// App.js
 import 'react-native-gesture-handler';
 import React from 'react';
 import { Provider } from 'react-redux';
@@ -11,9 +12,10 @@ import { StatusBar } from 'expo-status-bar';
 export default function App() {
   return (
     <Provider store={store}>
-      <PersistGate loading={<LoadingComponent />} persistor={persistor}>
+      <PersistGate loading={null} persistor={persistor}>
         <NavigationContainer>
           <MainComponent />
+          <LoadingComponent />
           <StatusBar style="auto" />
         </NavigationContainer>
       </PersistGate>
