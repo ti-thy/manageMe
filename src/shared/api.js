@@ -1,4 +1,3 @@
-// src/shared/api.js
 import * as WebBrowser from "expo-web-browser";
 import * as AuthSession from "expo-auth-session";
 import * as Notifications from "expo-notifications";
@@ -16,25 +15,24 @@ export const authenticateWithGoogle = async (existingEmails) => {
   if (existingEmails.length >= MAX_EMAIL_ACCOUNTS) {
     throw new Error(`Maximum of ${MAX_EMAIL_ACCOUNTS} email accounts reached`);
   }
-  const discovery = {
-    authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
-    tokenEndpoint: "https://oauth2.googleapis.com/token",
-  };
   const redirectUri = AuthSession.makeRedirectUri({ useProxy: true });
-  const config = {
-    clientId: CLIENT_ID, // Fixed
-    clientSecret: CLIENT_SECRET, // Fixed
+  const authRequest = new AuthSession.AuthRequest({
+    clientId: CLIENT_ID,
     redirectUri,
     scopes: [
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/userinfo.email",
     ],
-  };
-
-  const result = await AuthSession.startAsync({
-    authUrl: AuthSession.getAuthorizationUrl(config, discovery),
+    responseType: AuthSession.ResponseType.Code,
   });
+
+  const discovery = {
+    authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenEndpoint: 'https://oauth2.googleapis.com/token',
+    revocationEndpoint: 'https://oauth2.googleapis.com/revoke'
+  };
+  const result = await authRequest.promptAsync(discovery);
 
   if (result.type !== "success") {
     throw new Error("Authentication failed");
@@ -42,8 +40,8 @@ export const authenticateWithGoogle = async (existingEmails) => {
 
   const tokenResult = await AuthSession.exchangeCodeAsync(
     {
-      clientId: CLIENT_ID, // Fixed
-      clientSecret: CLIENT_SECRET, // Fixed
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
       code: result.params.code,
       redirectUri,
     },
@@ -51,19 +49,23 @@ export const authenticateWithGoogle = async (existingEmails) => {
   );
 
   const accessToken = tokenResult.accessToken;
-  const profileResponse = await fetch(
-    "https://www.googleapis.com/oauth2/v3/userinfo",
-    {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    }
-  );
+  const profileResponse = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
   const profile = await profileResponse.json();
+  if (!profile.email) {
+    throw new Error("Failed to retrieve user email");
+  }
   await storeEmailToken(profile.email, tokenResult);
   return { email: profile.email, accessToken };
 };
 
 export const storeEmailToken = async (email, token) => {
-  await AsyncStorage.setItem(`email_${email}`, JSON.stringify(token));
+  if (!email || typeof email !== "string") {
+    throw new Error("Invalid email provided for storage");
+  }
+  const safeKey = `email_${email.replace(/[^a-zA-Z0-9.-_]/g, "_")}`; // Sanitize key
+  await AsyncStorage.setItem(safeKey, JSON.stringify(token));
 };
 
 export const getEmailToken = async (email) => {
@@ -74,7 +76,7 @@ export const getEmailToken = async (email) => {
 export const fetchEmailEvents = async (accessToken) => {
   try {
     const response = await fetch(
-      `https://www.googleapis.com/gmail/v1/users/me/messages?q=invite+from:*.ics&maxResults=5&key=${API_KEY}`, // Fixed
+      `https://www.googleapis.com/gmail/v1/users/me/messages?q=invite+from:*.ics&maxResults=5&key=${API_KEY}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     if (!response.ok) {
@@ -89,7 +91,7 @@ export const fetchEmailEvents = async (accessToken) => {
     const events = [];
     for (const messageId of messageIds) {
       const msgResponse = await fetch(
-        `https://www.googleapis.com/gmail/v1/users/me/messages/${messageId}?key=${API_KEY}`, // Fixed
+        `https://www.googleapis.com/gmail/v1/users/me/messages/${messageId}?key=${API_KEY}`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       const msgData = await msgResponse.json();
@@ -105,15 +107,13 @@ export const fetchEmailEvents = async (accessToken) => {
 
 const parseEventFromEmail = (email) => {
   const headers = email.payload?.headers || [];
-  const subjectHeader = headers.find(
-    (header) => header.name.toLowerCase() === "subject"
-  );
+  const subjectHeader = headers.find((header) => header.name.toLowerCase() === "subject");
   const subject = subjectHeader ? subjectHeader.value : "Untitled Event";
   const snippet = email.snippet || "";
   const match = snippet.match(/(\w+ \d+, \d{4} at \d+:\d+\w+)/);
   const start = match ? new Date(match[1]) : new Date();
   if (isNaN(start)) return null;
-  const end = new Date(start.getTime() + 3600000); // 1 hour
+  const end = new Date(start.getTime() + 3600000);
   return {
     id: email.id,
     title: subject,
@@ -125,7 +125,7 @@ const parseEventFromEmail = (email) => {
 export const syncToCalendar = async (event) => {
   try {
     const response = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events?key=${API_KEY}`, // Fixed
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events?key=${API_KEY}`,
       {
         method: "POST",
         headers: {
@@ -139,7 +139,16 @@ export const syncToCalendar = async (event) => {
         }),
       }
     );
-    // ... rest unchanged
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "Event Synced",
+        body: `Event "${event.title}" added to your calendar.`,
+      },
+      trigger: null,
+    });
+    return data;
   } catch (error) {
     console.error("Error syncing to calendar:", error);
     throw error;
@@ -154,13 +163,16 @@ export const refreshAccessToken = async (email) => {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_id: CLIENT_ID, // Fixed
-        client_secret: CLIENT_SECRET, // Fixed
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
         refresh_token: token.refreshToken,
         grant_type: "refresh_token",
       }),
     });
-    // ... rest unchanged
+    const newTokens = await response.json();
+    if (newTokens.error) throw new Error(newTokens.error.message);
+    await storeEmailToken(email, { ...token, accessToken: newTokens.access_token });
+    return newTokens.access_token;
   } catch (error) {
     console.error("Error refreshing token:", error);
     throw error;
